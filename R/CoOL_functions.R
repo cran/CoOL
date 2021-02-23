@@ -185,6 +185,7 @@ CoOL_1_initiate_neural_network <- function(inputs,output,hidden=10) {
 #' @param input_parameter_reg Regularisation decreasing parameter value at each iteration for the input parameters.
 #' @param spline_df Degrees of freedom for the spline fit for the performance plots.
 #' @param restore_par_options Restore par options.
+#' @param drop_out To drop connections if their weights reaches zero.
 #' @return An updated list of connection weights, bias weights and meta data.
 #' @references Rieckmann, Dworzynski, Arras, Lapuschkin, Samek, Arah, Rod, Ekstrom. Causes of outcome learning: A causal inference-inspired machine learning approach to disentangling common combinations of potential causes of a health outcome. medRxiv (2020) <doi:10.1101/2020.12.10.20225243>
 #' @examples
@@ -193,13 +194,13 @@ CoOL_1_initiate_neural_network <- function(inputs,output,hidden=10) {
 
 CoOL_2_train_neural_network <- function(X_train, Y_train, X_test, Y_test, model, lr = c(1e-4,1e-5,1e-6),
                             epochs = 2000, patience = 100,monitor = TRUE,
-                            plot_and_evaluation_frequency = 50, input_parameter_reg = 1e-3, spline_df=10, restore_par_options = TRUE) {
+                            plot_and_evaluation_frequency = 50, input_parameter_reg = 1e-3, spline_df=10, restore_par_options = TRUE, drop_out = 0) {
 if (restore_par_options==TRUE) {
     oldpar <- par(no.readonly = TRUE)
   on.exit(par(oldpar))
 }
-if (X_test != X_train) print("Traning data and test data are not equivalent. It is recommended for CoOL that the model is fully trained on the training data but manual control is conducted on a test data set.")
-if (Y_test != Y_train) print("Traning outcomes and test outcomes are not equivalent. It is recommended for CoOL that the model is fully trained on the training data but manual control is conducted on a test data set.")
+if (mean(as.vector(X_test == X_train))!=1) print("Traning data and test data are not equivalent. It is recommended for CoOL that the model is fully trained on the training data but manual control is conducted on a test data set.")
+if (mean(as.vector(Y_test == Y_train))!=1) print("Traning outcomes and test outcomes are not equivalent. It is recommended for CoOL that the model is fully trained on the training data but manual control is conducted on a test data set.")
 for (lr_set in lr) {
   print(paste0("############################## Learning rate: ",lr_set," ##############################"))
   performance = model$train_performance
@@ -210,7 +211,7 @@ for (lr_set in lr) {
     for(rounds in 1:ceiling(c(epochs/plot_and_evaluation_frequency))) {
       model <- cpp_train_network_relu(x=as.matrix(X_train),y=as.matrix(Y_train),testx=as.matrix(X_test),testy=as.matrix(Y_test),
               lr = lr_set, maxepochs  = plot_and_evaluation_frequency, W1_input = model[[1]],B1_input = model[[2]],
-              W2_input = model[[3]],B2_input = model[[4]],input_parameter_reg=input_parameter_reg)
+              W2_input = model[[3]],B2_input = model[[4]],input_parameter_reg=input_parameter_reg,drop_out=drop_out)
       performance <- c(performance,model$train_performance)
       performance_test <- c(performance_test,model$test_performance)
       weight_performance <- c(weight_performance,model$weight_performance)
@@ -277,7 +278,7 @@ CoOL_3_plot_neural_network <- function(model,names,arrow_size = NA,
   # Trained edges
   for (g in 1:nrow(model[[1]])) {
     for (h in 1:ncol(model[[1]])) {
-      arrows(x0=1,x1=2,y0=-g,y1=-h,lwd=abs(model[[1]][g,h])*arrow_size,col=ifelse(model[[1]][g,h]>=0,"dodgerblue","red"),length=0)
+      arrows(x0=1,x1=2,y0=-g,y1=-h,lwd=abs(model[[1]][g,h])*arrow_size,col=ifelse(model[[1]][g,h]>0,adjustcolor("dodgerblue",1),adjustcolor("dodgerblue",0)),length=0)
       #      text(1,-g,round(model[[1]][g,h],2),pos=3)
     }
   }
@@ -433,13 +434,14 @@ CoOL_5_layerwise_relevance_propagation <- function(X,model) {
 #' @param risk_contributions The risk contributions.
 #' @param number_of_subgroups The number of sub-groups chosen (Visual inspection is necessary).
 #' @param title The title of the plot.
+#' @param colours Colours indicating each sub-group.
 #' @return A dendrogram illustrating similarities between individuals based on their risk contributions.
 #' @examples
 #' #See the example under CoOL_0_working_example
 
 
 
-CoOL_6_dendrogram <- function(risk_contributions,number_of_subgroups=3, title = "Dendrogram") {
+CoOL_6_dendrogram <- function(risk_contributions,number_of_subgroups=3, title = "Dendrogram", colours=NA) {
   requireNamespace("ggtree")
   p <- cbind(risk_contributions)
   p <- plyr::count(p)
@@ -451,7 +453,7 @@ CoOL_6_dendrogram <- function(risk_contributions,number_of_subgroups=3, title = 
   temp <- merge(cbind(id,risk_contributions),cbind(p,pclus))
   clus <- temp$pclus[order(temp$id)]
   table(clus)
-  colours <- rep(c("grey",wes_palette("Darjeeling1")),10)
+  if (is.na(colours[1])) colours <- c("grey",wes_palette("Darjeeling1"))
   print(ggtree::ggtree(p_h_c,layout="equal_angle") +
           ggtree::geom_tippoint(size=sqrt(pfreq)/2, alpha=.2, color=colours[pclus])+
           ggtitle(title) +
@@ -479,10 +481,22 @@ CoOL_6_sub_groups <- function(risk_contributions,number_of_subgroups=3) {
   p_h_c <- hclustgeo(dist(p,method = "manhattan"), wt=pfreq)
   pclus <- cutree(p_h_c, number_of_subgroups)
   id <- 1:nrow(risk_contributions)
-  temp <- merge(cbind(id,risk_contributions),cbind(p,pclus))
+  x <- data.frame(cbind(id,risk_contributions))
+  y <- data.frame(cbind(p,pclus))
+  temp <- merge(x,y)
   clus <- temp$pclus[order(temp$id)]
-  table(clus)
-  return(clus)
+ # reordering
+  clus_pred = NA
+  for (i in 1:number_of_subgroups) {
+    clus_pred[i] <- sum(colMeans(as.matrix(risk_contributions[clus==i,])))
+  }
+  clus_order <- order(clus_pred)
+  clus_new = clus
+  index = 1:max(clus)
+  for (i in 1:length(clus)) {
+    clus_new[i] = index[which(clus_order==clus[i])]
+  }
+  return(clus_new)
 }
 
 
@@ -495,19 +509,20 @@ CoOL_6_sub_groups <- function(risk_contributions,number_of_subgroups=3) {
 #' @param title The title of the plot.
 #' @param y_max Fix the axis of the risk of the outcome.
 #' @param restore_par_options Restore par options.
+#' @param colours Colours indicating each sub-group.
 #' @return A plot with prevalence and mean risks by sub-groups.
 #' @references Rieckmann, Dworzynski, Arras, Lapuschkin, Samek, Arah, Rod, Ekstrom. Causes of outcome learning: A causal inference-inspired machine learning approach to disentangling common combinations of potential causes of a health outcome. medRxiv (2020) <doi:10.1101/2020.12.10.20225243>
 #' @examples
 #' #See the example under CoOL_0_working_example
 
 CoOL_7_prevalence_and_mean_risk_plot <- function(risk_contributions,sub_groups,
-  title="Prevalence and mean risk\nof sub-groups",y_max = NA, restore_par_options = TRUE) {
+  title="Prevalence and mean risk\nof sub-groups",y_max = NA, restore_par_options = TRUE, colours=NA) {
   if (restore_par_options==TRUE) {
     oldpar <- par(no.readonly = TRUE)
     on.exit(par(oldpar))
   }
   par(mar=c(5,3,2,2))
-  colours <- c("grey",wes_palette("Darjeeling1"))
+  if (is.na(colours[1])) colours <- c("grey",wes_palette("Darjeeling1"))
 risk_max = 0
     for (i in 1:max(sub_groups)) {
     risk <- sum(colMeans(as.matrix(risk_contributions[sub_groups==i,])))
@@ -540,18 +555,19 @@ risk_max = 0
 #' @param model The trained non-negative model.
 #' @param exclude_below A lower cut-off for which risk contributions shown.
 #' @param restore_par_options Restore par options.
+#' @param colours Colours indicating each sub-group.
 #' @export
 #' @references Rieckmann, Dworzynski, Arras, Lapuschkin, Samek, Arah, Rod, Ekstrom. Causes of outcome learning: A causal inference-inspired machine learning approach to disentangling common combinations of potential causes of a health outcome. medRxiv (2020) <doi:10.1101/2020.12.10.20225243>
 #' @examples
 #' #See the example under CoOL_0_working_example
 
 CoOL_8_mean_risk_contributions_by_sub_group <- function(risk_contributions,sub_groups,exposure_data,outcome_data,
-                        model,exclude_below=0.001, restore_par_options = TRUE) {
+                        model,exclude_below=0.001, restore_par_options = TRUE, colours=NA) {
   if (restore_par_options==TRUE) {
     oldpar <- par(no.readonly = TRUE)
     on.exit(par(oldpar))
   }
-  colours <- rep(c("grey",wes_palette("Darjeeling1")),10)
+  if (is.na(colours[1])) colours <- c("grey",wes_palette("Darjeeling1"))
   prev0 = 0; total = 0
   for (i in 1:max(sub_groups)) {
     prev <- sum(sub_groups==i)/length(sub_groups)
@@ -576,7 +592,7 @@ CoOL_8_mean_risk_contributions_by_sub_group <- function(risk_contributions,sub_g
   text(-ncol(d)-6,0,"Mean risk contributions by sub-group\n(Standard deviation)\n[mean risk contribution if other exposures are set to 0]",pos=4,cex=st)
   for (i in 1:max(sub_groups)) {
     prev <- sum(sub_groups==i)/length(sub_groups)
-    risk <- sum(colMeans(as.matrix(risk_contributions[sub_groups==i,])))
+    risk <- sum(colMeans(as.matrix(risk_contributions[sub_groups==i,]),na.rm=T))
     risk_obs <- mean(outcome_data[sub_groups==i])
     text(-ncol(d)-6,-i,paste0("Sub-group ",i,": ","n=",sum(sub_groups==i),", e=",sum(outcome_data[sub_groups==i]),",Prev=",format(round(prev*100,1),nsmall=1),"%, risk=",format(round(risk*100,1),nsmall=1),"%,\nexcess=",
                               format(round(prev*(risk-mean(risk_contributions$Baseline_risk))/total*100,1),nsmall=1),

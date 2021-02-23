@@ -1,8 +1,8 @@
 Package: CoOL
 Type: Package
 Title: Causes of Outcome Learning
-Version: 1.0
-Date: 2021-02-05
+Version: 1.0.1
+Date: 2021-02-23
 Authors@R: c(
    person("Andreas", "Rieckmann", role = c("aut","cre"), email = "aric@sund.ku.dk"),
    person("Piotr", "Dworzynski", role = "aut", email = "piotr@sund.ku.dk"),
@@ -20,10 +20,10 @@ Encoding: UTF-8
 LazyData: true
 RoxygenNote: 7.1.1
 NeedsCompilation: yes
-Packaged: 2021-02-10 14:27:27 UTC; lvb917
+Packaged: 2021-02-23 14:33:24 UTC; lvb917
 Author: Andreas Rieckmann [aut, cre],
   Piotr Dworzynski [aut],
   Leila Arras [ctb],
   Claus Thorn Ekstrom [aut]
 Repository: CRAN
-Date/Publication: 2021-02-12 10:10:12 UTC
+Date/Publication: 2021-02-23 15:10:02 UTC
