@@ -2,6 +2,8 @@
 ######################## Version 30.10.2020
 
 Sys.setenv('_R_CHECK_SYSTEM_CLOCK_' = 0)
+Sys.setenv('_R_CHECK_FORCE_SUGGESTS_' = FALSE)
+
 
 ########## Minor functions ############
 
@@ -153,12 +155,13 @@ CoOL_1_initiate_neural_network <- function(inputs,output,hidden=10) {
   b1 <- -abs(random(1,hidden))
   w2 <- matrix(1,nrow=hidden)
   b2 <- mean(output)
+  c2 <- abs(random(1,1))
   performance <- NA
   best_epoch <- NA
   weight_performance <- NA
   epochs <- NA
   b2 <- as.matrix(mean(output))
-  return(list(w1,b1,w2,b2,performance,epochs,best_epoch))
+  return(list(w1,b1,w2,b2,c2,performance,epochs,best_epoch))
 }
 
 
@@ -174,33 +177,48 @@ CoOL_1_initiate_neural_network <- function(inputs,output,hidden=10) {
 #'
 #' @param X_train The exposure data for the training data.
 #' @param Y_train The outcome data for the training data.
+#' @param C_train One variable to adjust the analysis for such as calendar time (training data).
 #' @param X_test The exposure data for the test data (currently the training data is used).
 #' @param Y_test The outcome data for the test data (currently the training data is used).
+#' @param C_test One variable to adjust the analysis for such as calendar time (currently the training data is used).
 #' @param model The fitted non-negative neural network.
 #' @param lr Learning rate (several LR can be provided, such that the model training will train for each LR and continue to the next).
 #' @param epochs Epochs.
 #' @param patience The number of epochs allowed without an improvement in performance.
+#' @param ipw a vector of weights per observation to allow for inverse probability of censoring weighting to correct for selection bias
 #' @param monitor Whether a monitoring plot will be shown during training.
 #' @param plot_and_evaluation_frequency The interval for plotting the performance and checking the patience.
 #' @param input_parameter_reg Regularisation decreasing parameter value at each iteration for the input parameters.
 #' @param spline_df Degrees of freedom for the spline fit for the performance plots.
 #' @param restore_par_options Restore par options.
 #' @param drop_out To drop connections if their weights reaches zero.
+#' @param fix_baseline_risk To fix the baseline risk at a value.
 #' @return An updated list of connection weights, bias weights and meta data.
 #' @references Rieckmann, Dworzynski, Arras, Lapuschkin, Samek, Arah, Rod, Ekstrom. Causes of outcome learning: A causal inference-inspired machine learning approach to disentangling common combinations of potential causes of a health outcome. medRxiv (2020) <doi:10.1101/2020.12.10.20225243>
 #' @examples
 #' #See the example under CoOL_0_working_example
 
 
-CoOL_2_train_neural_network <- function(X_train, Y_train, X_test, Y_test, model, lr = c(1e-4,1e-5,1e-6),
+CoOL_2_train_neural_network <- function(X_train, Y_train, X_test, Y_test, C_train=1, C_test=1, model, lr = c(1e-4,1e-5,1e-6),
                             epochs = 2000, patience = 100,monitor = TRUE,
-                            plot_and_evaluation_frequency = 50, input_parameter_reg = 1e-3, spline_df=10, restore_par_options = TRUE, drop_out = 0) {
+                            plot_and_evaluation_frequency = 50, input_parameter_reg = 1e-3, spline_df=10, restore_par_options = TRUE, drop_out = 0, fix_baseline_risk = -1,
+                            ipw = 1) {
 if (restore_par_options==TRUE) {
     oldpar <- par(no.readonly = TRUE)
   on.exit(par(oldpar))
 }
 if (mean(as.vector(X_test == X_train))!=1) print("Traning data and test data are not equivalent. It is recommended for CoOL that the model is fully trained on the training data but manual control is conducted on a test data set.")
 if (mean(as.vector(Y_test == Y_train))!=1) print("Traning outcomes and test outcomes are not equivalent. It is recommended for CoOL that the model is fully trained on the training data but manual control is conducted on a test data set.")
+if (mean(as.vector(C_test == C_train))!=1) print("Confounder data in the training and test arguments are not equivalent. It is recommended for CoOL that the model is fully trained on the training data but manual control is conducted on a test data set.")
+if (length(ipw) != nrow(X_train)) {
+  ipw = rep(1,nrow(X_train))
+  print("Equal weights are applied (assuming no selection bias)")
+}
+if (length(C_train) != nrow(X_train)) {
+  C_train = rep(1,nrow(X_train))
+  C_test = rep(1,nrow(X_train))
+    print("Not adjusting for calendar time")
+}
 for (lr_set in lr) {
   print(paste0("############################## Learning rate: ",lr_set," ##############################"))
   performance = model$train_performance
@@ -210,8 +228,10 @@ for (lr_set in lr) {
   par(mfrow=c(1,3));par(mar=c(3,5,3,1))
     for(rounds in 1:ceiling(c(epochs/plot_and_evaluation_frequency))) {
       model <- cpp_train_network_relu(x=as.matrix(X_train),y=as.matrix(Y_train),testx=as.matrix(X_test),testy=as.matrix(Y_test),
+                                      c=as.matrix(C_train),testc = as.matrix(C_test),
               lr = lr_set, maxepochs  = plot_and_evaluation_frequency, W1_input = model[[1]],B1_input = model[[2]],
-              W2_input = model[[3]],B2_input = model[[4]],input_parameter_reg=input_parameter_reg,drop_out=drop_out)
+              W2_input = model[[3]],B2_input = model[[4]],C2_input = model[[5]],input_parameter_reg=input_parameter_reg,drop_out=drop_out,fix_baseline_risk=fix_baseline_risk,
+              ipw=ipw)
       performance <- c(performance,model$train_performance)
       performance_test <- c(performance_test,model$test_performance)
       weight_performance <- c(weight_performance,model$weight_performance)
@@ -435,22 +455,29 @@ CoOL_5_layerwise_relevance_propagation <- function(X,model) {
 #' @param number_of_subgroups The number of sub-groups chosen (Visual inspection is necessary).
 #' @param title The title of the plot.
 #' @param colours Colours indicating each sub-group.
+#' @param ipw a vector of weights per observation to allow for inverse probability of censoring weighting to correct for selection bias
 #' @return A dendrogram illustrating similarities between individuals based on their risk contributions.
 #' @examples
 #' #See the example under CoOL_0_working_example
 
 
 
-CoOL_6_dendrogram <- function(risk_contributions,number_of_subgroups=3, title = "Dendrogram", colours=NA) {
+CoOL_6_dendrogram <- function(risk_contributions,number_of_subgroups=3, title = "Dendrogram", colours=NA, ipw = 1) {
   requireNamespace("ggtree")
+  if (length(ipw) != nrow(risk_contributions)) {
+    ipw = rep(1,nrow(risk_contributions))
+    print("Equal weights are applied (assuming no selection bias)")
+  }
   p <- cbind(risk_contributions)
-  p <- plyr::count(p)
+  p$ipw <- ipw
+  p <- plyr::count(p, wt_var = "ipw")
   pfreq <- p$freq
-  p <- p[,-c(ncol(p))]
+  p <- p[,1:c(ncol(p)-3)]
   p_h_c <- hclustgeo(dist(p,method = "manhattan"), wt=pfreq)
   pclus <- cutree(p_h_c, number_of_subgroups)
   id <- 1:nrow(risk_contributions)
   temp <- merge(cbind(id,risk_contributions),cbind(p,pclus))
+  temp <- temp[duplicated(temp)==FALSE,]
   clus <- temp$pclus[order(temp$id)]
   table(clus)
   if (is.na(colours[1])) colours <- c("grey",wes_palette("Darjeeling1"))
@@ -468,22 +495,29 @@ CoOL_6_dendrogram <- function(risk_contributions,number_of_subgroups=3, title = 
 #'
 #' @param risk_contributions The risk contributions.
 #' @param number_of_subgroups The number of sub-groups chosen (Visual inspection is necessary).
+#' @param ipw a vector of weights per observation to allow for inverse probability of censoring weighting to correct for selection bias
 #' @return A vector [number of individuals] with an assigned sub-group.
 #' @references Rieckmann, Dworzynski, Arras, Lapuschkin, Samek, Arah, Rod, Ekstrom. Causes of outcome learning: A causal inference-inspired machine learning approach to disentangling common combinations of potential causes of a health outcome. medRxiv (2020) <doi:10.1101/2020.12.10.20225243>
 #' @examples
 #' #See the example under CoOL_0_working_example
 
-CoOL_6_sub_groups <- function(risk_contributions,number_of_subgroups=3) {
+CoOL_6_sub_groups <- function(risk_contributions,number_of_subgroups=3,ipw=1) {
+  if (length(ipw) != nrow(risk_contributions)) {
+    ipw = rep(1,nrow(risk_contributions))
+    print("Equal weights are applied (assuming no selection bias)")
+  }
   p <- cbind(risk_contributions)
-  p <- plyr::count(p)
+  p$ipw <- ipw
+  p <- plyr::count(p, wt_var = "ipw")
   pfreq <- p$freq
-  p <- p[,-c(ncol(p))]
+  p <- p[,1:c(ncol(p)-3)]
   p_h_c <- hclustgeo(dist(p,method = "manhattan"), wt=pfreq)
   pclus <- cutree(p_h_c, number_of_subgroups)
   id <- 1:nrow(risk_contributions)
   x <- data.frame(cbind(id,risk_contributions))
   y <- data.frame(cbind(p,pclus))
   temp <- merge(x,y)
+  temp <- temp[duplicated(temp)==FALSE,]
   clus <- temp$pclus[order(temp$id)]
  # reordering
   clus_pred = NA
@@ -510,16 +544,21 @@ CoOL_6_sub_groups <- function(risk_contributions,number_of_subgroups=3) {
 #' @param y_max Fix the axis of the risk of the outcome.
 #' @param restore_par_options Restore par options.
 #' @param colours Colours indicating each sub-group.
+#' @param ipw a vector of weights per observation to allow for inverse probability of censoring weighting to correct for selection bias
 #' @return A plot with prevalence and mean risks by sub-groups.
 #' @references Rieckmann, Dworzynski, Arras, Lapuschkin, Samek, Arah, Rod, Ekstrom. Causes of outcome learning: A causal inference-inspired machine learning approach to disentangling common combinations of potential causes of a health outcome. medRxiv (2020) <doi:10.1101/2020.12.10.20225243>
 #' @examples
 #' #See the example under CoOL_0_working_example
 
 CoOL_7_prevalence_and_mean_risk_plot <- function(risk_contributions,sub_groups,
-  title="Prevalence and mean risk\nof sub-groups",y_max = NA, restore_par_options = TRUE, colours=NA) {
+  title="Prevalence and mean risk\nof sub-groups",y_max = NA, restore_par_options = TRUE, colours=NA, ipw = 1) {
   if (restore_par_options==TRUE) {
     oldpar <- par(no.readonly = TRUE)
     on.exit(par(oldpar))
+  }
+  if (length(ipw) != nrow(risk_contributions)) {
+    ipw = rep(1,nrow(risk_contributions))
+    print("Equal weights are applied (assuming no selection bias)")
   }
   par(mar=c(5,3,2,2))
   if (is.na(colours[1])) colours <- c("grey",wes_palette("Darjeeling1"))
@@ -534,7 +573,7 @@ risk_max = 0
   rect(0,0,1,1)
   prev0 = 0; total = 0
   for (i in 1:max(sub_groups)) {
-    prev <- sum(sub_groups==i)/length(sub_groups)
+    prev <- sum(ipw[sub_groups==i])/sum(ipw)
     risk <- sum(colMeans(as.matrix(risk_contributions[sub_groups==i,])))
     rect(xleft = prev0,ybottom = 0,xright = prev+prev0,ytop = risk, col=colours[i])
     prev0 = prev + prev0
@@ -556,21 +595,26 @@ risk_max = 0
 #' @param exclude_below A lower cut-off for which risk contributions shown.
 #' @param restore_par_options Restore par options.
 #' @param colours Colours indicating each sub-group.
+#' @param ipw a vector of weights per observation to allow for inverse probability of censoring weighting to correct for selection bias
 #' @export
 #' @references Rieckmann, Dworzynski, Arras, Lapuschkin, Samek, Arah, Rod, Ekstrom. Causes of outcome learning: A causal inference-inspired machine learning approach to disentangling common combinations of potential causes of a health outcome. medRxiv (2020) <doi:10.1101/2020.12.10.20225243>
 #' @examples
 #' #See the example under CoOL_0_working_example
 
 CoOL_8_mean_risk_contributions_by_sub_group <- function(risk_contributions,sub_groups,exposure_data,outcome_data,
-                        model,exclude_below=0.001, restore_par_options = TRUE, colours=NA) {
+                        model,exclude_below=0.001, restore_par_options = TRUE, colours=NA, ipw = 1) {
   if (restore_par_options==TRUE) {
     oldpar <- par(no.readonly = TRUE)
     on.exit(par(oldpar))
   }
+  if (length(ipw) != nrow(risk_contributions)) {
+    ipw = rep(1,nrow(risk_contributions))
+    print("Equal weights are applied (assuming no selection bias)")
+  }
   if (is.na(colours[1])) colours <- c("grey",wes_palette("Darjeeling1"))
   prev0 = 0; total = 0
   for (i in 1:max(sub_groups)) {
-    prev <- sum(sub_groups==i)/length(sub_groups)
+    prev <- sum(ipw[sub_groups==i])/sum(ipw)
     risk <- sum(colMeans(as.matrix(risk_contributions[sub_groups==i,])))
     prev0 = prev + prev0
     total = total + risk * prev
@@ -591,13 +635,13 @@ CoOL_8_mean_risk_contributions_by_sub_group <- function(risk_contributions,sub_g
   text(c(-ncol(d)):c(-1),0,rev(colnames(d)),srt=25,cex=st)
   text(-ncol(d)-6,0,"Mean risk contributions by sub-group\n(Standard deviation)\n[mean risk contribution if other exposures are set to 0]",pos=4,cex=st)
   for (i in 1:max(sub_groups)) {
-    prev <- sum(sub_groups==i)/length(sub_groups)
+    prev <- sum(ipw[sub_groups==i])/sum(ipw)
     risk <- sum(colMeans(as.matrix(risk_contributions[sub_groups==i,]),na.rm=T))
-    risk_obs <- mean(outcome_data[sub_groups==i])
-    text(-ncol(d)-6,-i,paste0("Sub-group ",i,": ","n=",sum(sub_groups==i),", e=",sum(outcome_data[sub_groups==i]),",Prev=",format(round(prev*100,1),nsmall=1),"%, risk=",format(round(risk*100,1),nsmall=1),"%,\nexcess=",
+    risk_obs <- sum(ipw[sub_groups==i]*outcome_data[sub_groups==i])/sum(ipw[sub_groups==i])
+    text(-ncol(d)-6,-i,paste0("Sub-group ",i,": ","n=",round(sum(ipw[sub_groups==i]),1),", e=",round(sum(ipw[sub_groups==i]*outcome_data[sub_groups==i]),1),",Prev=",format(round(prev*100,1),nsmall=1),"%, risk=",format(round(risk*100,1),nsmall=1),"%,\nexcess=",
                               format(round(prev*(risk-mean(risk_contributions$Baseline_risk))/total*100,1),nsmall=1),
                               "%, Obs risk=",format(round(risk_obs*100,1),nsmall=1),"% (",
-                              paste0(format(round(prop.test(sum(outcome_data[sub_groups==i]),length(t(outcome_data)[sub_groups==i]))$conf.int*100,1),nsmall=1),collapse="-"),
+                              paste0(format(round(prop.test(sum(ipw[sub_groups==i]*outcome_data[sub_groups==i]),sum(ipw[sub_groups==i]))$conf.int*100,1),nsmall=1),collapse="-"),
                               "%)\n",
                               "Risk based on the sum of individual effects =",
                               format(round(mean(CoOL_6_sum_of_individual_effects(exposure_data,model=model)[sub_groups==i])*100,1),nsmall=1),

@@ -9,6 +9,8 @@ CoOL_2_train_neural_network(
   Y_train,
   X_test,
   Y_test,
+  C_train = 1,
+  C_test = 1,
   model,
   lr = c(1e-04, 1e-05, 1e-06),
   epochs = 2000,
@@ -18,7 +20,9 @@ CoOL_2_train_neural_network(
   input_parameter_reg = 0.001,
   spline_df = 10,
   restore_par_options = TRUE,
-  drop_out = 0
+  drop_out = 0,
+  fix_baseline_risk = -1,
+  ipw = 1
 )
 }
 \arguments{
@@ -29,6 +33,10 @@ CoOL_2_train_neural_network(
 \item{X_test}{The exposure data for the test data (currently the training data is used).}
 
 \item{Y_test}{The outcome data for the test data (currently the training data is used).}
+
+\item{C_train}{One variable to adjust the analysis for such as calendar time (training data).}
+
+\item{C_test}{One variable to adjust the analysis for such as calendar time (currently the training data is used).}
 
 \item{model}{The fitted non-negative neural network.}
 
@@ -49,6 +57,10 @@ CoOL_2_train_neural_network(
 \item{restore_par_options}{Restore par options.}
 
 \item{drop_out}{To drop connections if their weights reaches zero.}
+
+\item{fix_baseline_risk}{To fix the baseline risk at a value.}
+
+\item{ipw}{a vector of weights per observation to allow for inverse probability of censoring weighting to correct for selection bias}
 }
 \value{
 An updated list of connection weights, bias weights and meta data.
